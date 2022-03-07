@@ -2,8 +2,8 @@
 
 """
 邻道干扰统计脚本
-版本号：2.2.2.220115
-更新内容：
+版本号：2.2.3.220211
+更新内容：自动选择B2正则及时间格式
 使用步骤：
     1、修改配置文件日志数量、路径、正则式格式等
     2、执行程序
@@ -18,11 +18,13 @@ import chardet
 
 class ConfFile:
     def __init__(self, conf_path=os.getcwd() + "\\nei.ini"):
+        self.conf = configparser.ConfigParser()
         # 存储日志数量，所有日志的绝对路径
         self.fil_log = list()
-        self.conf = configparser.ConfigParser()
         self.time_fmt = list()
         self.b2_fmt = list()
+        self.prov = str()
+        self.sec_diff = int()
         try:
             try:
                 self.conf.read(conf_path, encoding="utf8")
@@ -52,23 +54,23 @@ class ConfFile:
             # 所有B2格式
             b2_fmt_num = int(self.conf.get(self.prov, "b2_fmt_num"))
             for b2_fmti in range(1, b2_fmt_num+1):
-                len_obu = int(self.conf.get(self.prov, "len_obu_"+str(b2_fmti)))
                 find_b2 = self.conf.get(self.prov, "find_b2_"+str(b2_fmti))
-                self.b2_fmt.append([len_obu, find_b2])
+                len_obu = int(self.conf.get(self.prov, "len_obu_"+str(b2_fmti)))
+                self.b2_fmt.append([find_b2, len_obu])
         except configparser.NoOptionError:
             exit("Error：配置文件读取失败")
 
 
 class LogData:
-    def __init__(self, path, time_fmt, b2_fmt):
+    def __init__(self, path, b2_fmt, time_fmt):
         # 日志路径
         self.log_path = path
-        self.fil_fmt_detect(time_fmt, b2_fmt)
-        self.rgl_exp_time = time_fmt[0][0]
-        self.time_hh = int(time_fmt[0][1])
-        self.time_minh = int(time_fmt[0][2])
-        self.time_sh = int(time_fmt[0][3])
-        self.rgl_exp_b2 = b2_fmt[0][1]
+        self.rgl_exp_time = str()
+        self.time_hh = int()
+        self.time_minh = int()
+        self.time_sh = int()
+        self.rgl_b2_len = int()
+        self.rgl_exp_b2 = str()
         self.b2_all = list()
         self.b2_rmv = list()
         self.coding = fil_coding_detect(self.log_path)
@@ -76,17 +78,36 @@ class LogData:
         # 从日志提取所有B2帧obuid及time，obuid长度默认为8，也有的日志是11（含有空格）
         with open(self.log_path, "r", encoding=self.coding, errors="ignore") as fil:
             fo = fil.read()
+            # 自动选择B2的正则表达式
+            for i in range(len(b2_fmt)):
+                fmt_tem = re.search(b2_fmt[i][0], fo, re.M)
+                if fmt_tem is not None:
+                    self.rgl_exp_b2 = b2_fmt[i][0]
+                    self.rgl_b2_len = b2_fmt[i][1]
+            # 搜索所有B2帧
             lst_tem = re.findall(self.rgl_exp_b2, fo, re.M)
             fo1 = "\n".join(lst_tem)
-            # time截取范围
-            exp_time_start = re.search(self.rgl_exp_time, fo1).start()
-            exp_time_end = re.search(self.rgl_exp_time, fo1).end()
+            # 自动选择时间格式
+            for i in range(len(time_fmt)):
+                time_tem = re.search(time_fmt[i][0], fo1, re.M)
+                if time_tem is not None:
+                    self.rgl_exp_time = time_fmt[i][0]
+                    self.time_hh = int(time_fmt[i][1])
+                    self.time_minh = int(time_fmt[i][2])
+                    self.time_sh = int(time_fmt[i][3])
+            # 确定时间截取范围
+            try:
+                # time截取范围
+                exp_time_start = re.search(self.rgl_exp_time, fo1).start()
+                exp_time_end = re.search(self.rgl_exp_time, fo1).end()
+            except AttributeError:
+                exit("Error：时间格式错误")
 
             # 从包含B2和时间的正则表达式搜索结果中提取obuid及time，len_obu为obuid长度，默认为8，也有的日志是11
             # 截取obuid及时间，计算秒数，用列表保存
             len_b2 = len(lst_tem[0])
             for i in range(len(lst_tem)):
-                b2_obuid = lst_tem[i][len_b2-b2_fmt[0][0]:]
+                b2_obuid = lst_tem[i][len_b2-self.rgl_b2_len:]
                 b2_time = lst_tem[i][exp_time_start:exp_time_end]
                 lst_time_sec = 10 * int(b2_time[self.time_hh]) + int(b2_time[self.time_hh + 1])
                 lst_time_sec = (60 * lst_time_sec + 10 * int(b2_time[self.time_minh]) + int(b2_time[self.time_minh + 1]))
@@ -98,9 +119,8 @@ class LogData:
 
     # 检测日志格式（待开发）
     def fil_fmt_detect(self, time_fmt, b2_fmt):
-        pass
-        # print(time_fmt, b2_fmt)
-        # print(self.log_path)
+        print(time_fmt, b2_fmt)
+        print(self.log_path)
 
 
 # 对从日志中提取出的B2帧obuid及time进行去重
@@ -126,7 +146,7 @@ def duplicate_obuid_remove(obu_all, obu_rmv):
 
 # 统计邻道干扰率：先对所有b2进行邻道统计，再去重
 # 输出邻道统计结果，默认阈值为10秒
-def calculate_nei_interference_rate(log_self, log_nei, sec_diff):
+def calculate_nei_interference_rate(log_self, log_nei, sec_diff=10):
     # 邻道干扰数
     inf_num = int()
     # 邻道干扰obuid
@@ -136,7 +156,7 @@ def calculate_nei_interference_rate(log_self, log_nei, sec_diff):
     for i in range(len(log_self.b2_all)):
         for j in range(len(log_nei.b2_all)):
             if abs(log_self.b2_all[i][2] - log_nei.b2_all[j][2]) < sec_diff and log_self.b2_all[i][1] == log_nei.b2_all[j][1]:
-                inf_tem = [log_self.b2_all[i][0], log_self.b2_all[i][1], log_self.b2_all[i][2], log_nei.b2_all[j][0],]
+                inf_tem = [log_self.b2_all[i][0], log_self.b2_all[i][1], log_nei.b2_all[j][2]-log_self.b2_all[i][2], log_nei.b2_all[j][0]]
                 inf_obu_tem.append(inf_tem)
     # 邻道统计结果去重（注意参数列表的元素顺序）
     # inf_obu元素顺序为本道时间、obuid、本道秒数、邻道时间
@@ -148,7 +168,7 @@ def calculate_nei_interference_rate(log_self, log_nei, sec_diff):
     inf_gate_nei = 100 * inf_num / len(log_nei.b2_rmv)
     # 输出结果
     print("邻道干扰obuid：")
-    print("本道时间---OBUID---本道秒数---邻道时间")
+    print("本道时间---OBUID---时间间隔（邻-本）---邻道时间")
     for obuid_tem in inf_obu:
         print(obuid_tem)
     print("%d秒邻道数：%d" % (sec_diff, inf_num))
@@ -175,8 +195,8 @@ def fil_coding_detect(src_file):
 if __name__ == "__main__":
     conf = ConfFile()
     for log_SN in range(int(conf.fil_log[0] / 2)):
-        log1 = LogData(conf.fil_log[2 * log_SN + 1], conf.time_fmt, conf.b2_fmt)
-        log2 = LogData(conf.fil_log[2 * log_SN + 2], conf.time_fmt, conf.b2_fmt)
+        log1 = LogData(conf.fil_log[2 * log_SN + 1], conf.b2_fmt, conf.time_fmt)
+        log2 = LogData(conf.fil_log[2 * log_SN + 2], conf.b2_fmt, conf.time_fmt)
         print("第%d组统计：" % (log_SN + 1))
         # 邻道干扰统计
         calculate_nei_interference_rate(log1, log2, sec_diff=conf.sec_diff)
