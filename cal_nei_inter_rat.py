@@ -178,18 +178,25 @@ def calculate_nei_interference_rate(log_self, log_nei, sec_diff=10):
 
 # 检测源文件编码并返回
 def fil_coding_detect(src_file):
-    char_detect = str()
-    with open(src_file, "rb") as fi:
-        for row in fi:
-            tmp = chardet.detect(row)
-            code = tmp.get("encoding")
-            if code == "utf-8":
-                char_detect = "utf-8"
-            else:
-                char_detect = "gb18030"
-            break
-        fi.close()
-    return char_detect
+    with open(src_file, "rb") as fi1:
+        with open(os.getcwd()+r"tmp.txt", "wb") as fi2:
+            for i in range(10000):
+                fi2.write(fi1.readline())
+            fi2.close()
+        fi1.close()
+
+    path_tmp = os.getcwd()+r"tmp.txt"
+    with open(path_tmp, "rb") as fi2:
+        buf = fi2.read()
+        result = chardet.detect(buf)
+        fi2.close()
+    os.remove(path_tmp)
+
+    if result["confidence"] > 0.95:
+        print("文件编码格式为：" + result["encoding"])
+        return result["encoding"]
+    else:
+        return None
 
 
 if __name__ == "__main__":
